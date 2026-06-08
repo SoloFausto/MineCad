@@ -1,0 +1,87 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	maven {
+		name = "Clojars"
+		url = "https://repo.clojars.org"
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"minecad" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	// implementation include("com.github.madhephaestus:manifold3d:${project.manifold3d_version}")
+	implementation include(files("/home/faus/Code/manifold3d-java/bindings/java/target/manifold3d-3.2.13.jar"))
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": project.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.compilerArgs.add("--enable-preview")
+}
+
+tasks.withType(JavaExec).configureEach {
+	jvmArgs "--enable-preview", "--enable-native-access=ALL-UNNAMED"
+}
+
+tasks.withType(Test).configureEach {
+	jvmArgs "--enable-preview", "--enable-native-access=ALL-UNNAMED"
+}
+
+java {
+	withSourcesJar()
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	def archiveBaseName = project.archives_base_name
+	inputs.property "archivesName", archiveBaseName
+
+	from("LICENSE") {
+		rename { "${it}_${archiveBaseName}" }
+	}
+}
+
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			from components.java
+		}
+	}
+
+	repositories {
+	}
+}

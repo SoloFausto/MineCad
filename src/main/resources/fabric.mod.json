@@ -1,0 +1,29 @@
+{
+	"schemaVersion": 1,
+	"id": "minecad",
+	"version": "${version}",
+	"name": "MineCad",
+	"description": "A Fabric mod for Minecraft.",
+	"authors": [
+		"faus"
+	],
+	"contact": {
+		"sources": "https://github.com/faus/MineCad"
+	},
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.faus.minecad.MineCad"
+		],
+		"client": [
+			"dev.faus.minecad.client.MineCadClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.2",
+		"minecraft": "~26.1.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

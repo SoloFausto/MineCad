@@ -33,9 +33,6 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	implementation include("org.kynosarges:tektosyne:${project.tektosyne_version}")
-	// implementation include("com.github.madhephaestus:manifold3d:${project.manifold3d_version}")
-	implementation include(files("/home/faus/Code/manifold3d-java/bindings/java/target/manifold3d-3.2.13.jar"))
 }
 
 processResources {

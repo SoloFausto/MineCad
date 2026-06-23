@@ -8,9 +8,6 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 
-import com.cadoodlecad.manifold.ManifoldBindings;
-import com.cadoodlecad.manifold.ManifoldBindings.MeshData64;
-
 import net.minecraft.world.item.Item;
 
 public class SketchItems {
@@ -32,6 +29,11 @@ public class SketchItems {
         return item;
     }
 
-    public static final Item PLANE = register("plane", Item::new, new Item.Properties());
+    public static final Item PLANE = register("plane", PlaneItem::new, new Item.Properties().stacksTo(1));
+    public static final Item SKETCH_TOOL = register("sketch_tool", SketchToolItem::new,
+            new Item.Properties().stacksTo(1));
+    public static final Item BOX_TOOL = register("box_tool", BoxToolItem::new, new Item.Properties().stacksTo(1));
+    public static final Item CIRCLE_TOOL = register("circle_tool", CircleToolItem::new,
+            new Item.Properties().stacksTo(1));
 
 }

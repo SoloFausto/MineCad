@@ -1,3 +1,22 @@
 {
-	"modmenu.descriptionTranslation.minecad": "A Fabric mod for Minecraft."
+	"modmenu.descriptionTranslation.minecad": "A Fabric mod for Minecraft.",
+	"item.minecad.sketch_tool": "Sketch Polygon Tool",
+	"item.minecad.box_tool": "Sketch Box Tool",
+	"item.minecad.circle_tool": "Sketch Circle Tool",
+	"item.minecad.plane": "Plane",
+	"message.minecad.plane.set": "Sketch plane set: %s = %s.",
+	"message.minecad.sketch_tool.no_plane": "Set a sketch plane with the Plane tool first.",
+	"message.minecad.sketch_tool.axis_mismatch": "Vertex must use the same %s coordinate: %s.",
+	"message.minecad.sketch_tool.raycast_miss": "No active sketch plane under the cursor.",
+	"message.minecad.sketch_tool.vertex": "Sketch vertex %s added at %s, %s, %s.",
+	"message.minecad.box_tool.first": "Box first corner set.",
+	"message.minecad.box_tool.complete": "Box created.",
+	"message.minecad.circle_tool.center": "Circle center set.",
+	"message.minecad.circle_tool.complete": "Circle created.",
+	"tooltip.minecad.plane": "Click a block face to set the sketch plane.",
+	"tooltip.minecad.plane.active": "Plane: %s = %s",
+	"tooltip.minecad.plane.objects": "Sketch objects: %s",
+	"tooltip.minecad.sketch_tool": "Click the active sketch plane to add polygon vertices.",
+	"tooltip.minecad.box_tool": "Click two corners on the active sketch plane.",
+	"tooltip.minecad.circle_tool": "Click center, then radius on the active sketch plane."
 }

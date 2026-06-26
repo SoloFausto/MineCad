@@ -11,17 +11,8 @@ public class MineCad implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		SketchItems.initialize();
-		try {
-			initBindings();
-		} catch (Exception e) {
-			LOGGER.error("Failed to initialize ManifoldBindings: {}", e.getMessage());
-			e.printStackTrace();
-			return;
-		}
+		ExtrudeCommand.initialize();
 		LOGGER.info("MineCad initialized");
 	}
 
-	static void initBindings() throws Exception {
-		LOGGER.info("ManifoldBindings initialized successfully");
-	}
 }

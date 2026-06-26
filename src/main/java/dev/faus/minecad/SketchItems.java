@@ -35,5 +35,9 @@ public class SketchItems {
     public static final Item BOX_TOOL = register("box_tool", BoxToolItem::new, new Item.Properties().stacksTo(1));
     public static final Item CIRCLE_TOOL = register("circle_tool", CircleToolItem::new,
             new Item.Properties().stacksTo(1));
+    public static final Item EXTRUDE_TOOL = register("extrude_tool", ExtrudeToolItem::new,
+            new Item.Properties().stacksTo(1));
+    public static final Item SELECT_TOOL = register("select_tool", SelectToolItem::new,
+            new Item.Properties().stacksTo(1));
 
 }

@@ -246,6 +246,9 @@ public final class SketchBoundaryRenderer {
         int color = blinkingColor(client.level.getGameTime());
         VertexConsumer quads = context.bufferSource().getBuffer(RenderTypes.debugQuads());
         for (BlockPos pos : selectedBodyPositions(client)) {
+            if (client.level.getBlockState(pos).isAir()) {
+                continue;
+            }
             renderBlockOverlay(matrices, quads, pos, camera, color);
         }
     }

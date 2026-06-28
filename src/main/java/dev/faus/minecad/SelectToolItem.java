@@ -85,10 +85,23 @@ public class SelectToolItem extends Item {
             return InteractionResult.FAIL;
         }
 
-        writeSelection(toolStack, body.get().id(), body.get().positions());
+        List<BlockPos> positions = solidPositions(level, body.get().positions());
+        if (positions.isEmpty()) {
+            clearSelection(toolStack);
+            SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.no_body"));
+            return InteractionResult.FAIL;
+        }
+
+        writeSelection(toolStack, body.get().id(), positions);
         SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.selected",
-                body.get().positions().size()));
+                positions.size()));
         return InteractionResult.SUCCESS_SERVER;
+    }
+
+    private static List<BlockPos> solidPositions(Level level, List<BlockPos> positions) {
+        return positions.stream()
+                .filter(pos -> !level.getBlockState(pos).isAir())
+                .toList();
     }
 
     private static void writeSelection(ItemStack stack, UUID bodyId, List<BlockPos> positions) {

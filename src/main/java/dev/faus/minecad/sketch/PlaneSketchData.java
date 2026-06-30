@@ -27,6 +27,7 @@ public final class PlaneSketchData {
     private static final String BOX_TYPE = "box";
     private static final String CIRCLE_TYPE = "circle";
     private static final String VERTICES_TAG = "vertices";
+    private static final String CLOSED_TAG = "closed";
     private static final String FIRST_TAG = "first";
     private static final String SECOND_TAG = "second";
     private static final String CENTER_TAG = "center";
@@ -68,7 +69,7 @@ public final class PlaneSketchData {
         return Optional.of(new PlaneSketch(id, dimension, plane, origin, renderOffsetSign, readObjects(tag)));
     }
 
-    public static Optional<PlaneSketch> appendPolygonVertex(ItemStack stack, PlanePoint vertex) {
+    public static Optional<PolygonAppendResult> appendPolygonVertex(ItemStack stack, PlanePoint vertex) {
         Optional<PlaneSketch> maybeSketch = read(stack);
         if (maybeSketch.isEmpty()) {
             return Optional.empty();
@@ -76,14 +77,18 @@ public final class PlaneSketchData {
 
         PlaneSketch sketch = maybeSketch.get();
         List<SketchObject> objects = new ArrayList<>(sketch.objects());
-        int polygonIndex = firstPolygonIndex(objects);
+        int polygonIndex = firstOpenPolygonIndex(objects);
         SketchObject.Polygon polygon = polygonIndex >= 0
                 ? (SketchObject.Polygon) objects.get(polygonIndex)
-                : new SketchObject.Polygon(List.of());
+                : new SketchObject.Polygon(List.of(), false);
 
         List<PlanePoint> vertices = new ArrayList<>(polygon.vertices());
-        vertices.add(vertex);
-        SketchObject.Polygon updatedPolygon = new SketchObject.Polygon(vertices);
+        boolean closed = isClosingVertex(vertices, vertex);
+        if (!closed) {
+            vertices.add(vertex);
+        }
+
+        SketchObject.Polygon updatedPolygon = new SketchObject.Polygon(vertices, closed);
         if (polygonIndex >= 0) {
             objects.set(polygonIndex, updatedPolygon);
         } else {
@@ -93,7 +98,7 @@ public final class PlaneSketchData {
         PlaneSketch updated = new PlaneSketch(sketch.id(), sketch.dimension(), sketch.plane(), sketch.origin(),
                 sketch.renderOffsetSign(), objects);
         write(stack, updated);
-        return Optional.of(updated);
+        return Optional.of(new PolygonAppendResult(updated, vertices.size(), closed));
     }
 
     public static Optional<PlaneSketch> appendBox(ItemStack stack, PlanePoint first, PlanePoint second) {
@@ -142,7 +147,8 @@ public final class PlaneSketchData {
         for (int i = 0; i < objectTags.size(); i++) {
             CompoundTag objectTag = objectTags.getCompoundOrEmpty(i);
             if (POLYGON_TYPE.equals(objectTag.getStringOr(TYPE_TAG, ""))) {
-                objects.add(new SketchObject.Polygon(readVertices(objectTag)));
+                objects.add(new SketchObject.Polygon(readVertices(objectTag),
+                        objectTag.getBooleanOr(CLOSED_TAG, false)));
             } else if (BOX_TYPE.equals(objectTag.getStringOr(TYPE_TAG, ""))) {
                 objects.add(new SketchObject.Box(readPoint(objectTag.getCompoundOrEmpty(FIRST_TAG)),
                         readPoint(objectTag.getCompoundOrEmpty(SECOND_TAG))));
@@ -161,6 +167,7 @@ public final class PlaneSketchData {
                 CompoundTag tag = new CompoundTag();
                 tag.putString(TYPE_TAG, POLYGON_TYPE);
                 tag.put(VERTICES_TAG, writeVertices(polygon.vertices()));
+                tag.putBoolean(CLOSED_TAG, polygon.closed());
                 objectTags.add(tag);
             } else if (object instanceof SketchObject.Box box) {
                 CompoundTag tag = new CompoundTag();
@@ -220,13 +227,20 @@ public final class PlaneSketchData {
         return Axis.Y;
     }
 
-    private static int firstPolygonIndex(List<SketchObject> objects) {
+    private static int firstOpenPolygonIndex(List<SketchObject> objects) {
         for (int i = 0; i < objects.size(); i++) {
-            if (objects.get(i) instanceof SketchObject.Polygon) {
+            if (objects.get(i) instanceof SketchObject.Polygon polygon && !polygon.closed()) {
                 return i;
             }
         }
         return -1;
+    }
+
+    private static boolean isClosingVertex(List<PlanePoint> vertices, PlanePoint vertex) {
+        return vertices.size() >= 3 && vertices.getFirst().equals(vertex);
+    }
+
+    public record PolygonAppendResult(PlaneSketch sketch, int vertexCount, boolean closed) {
     }
 
     public record PlaneSketch(UUID id, String dimension, SketchPlane plane, PlanePoint origin, int renderOffsetSign,
@@ -244,7 +258,7 @@ public final class PlaneSketchData {
     }
 
     public sealed interface SketchObject permits SketchObject.Polygon, SketchObject.Box, SketchObject.Circle {
-        record Polygon(List<PlanePoint> vertices) implements SketchObject {
+        record Polygon(List<PlanePoint> vertices, boolean closed) implements SketchObject {
             public Polygon {
                 vertices = List.copyOf(vertices);
             }

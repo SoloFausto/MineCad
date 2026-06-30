@@ -8,7 +8,7 @@ import java.util.UUID;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
-import dev.faus.minecad.ExtrudeToolItem.Operation;
+import dev.faus.minecad.ExtrudeCommand.Operation;
 import dev.faus.minecad.MineCad;
 import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
 import dev.faus.minecad.sketch.PlaneSketchData.SketchObject;
@@ -39,7 +39,7 @@ public final class ExtrusionWorldData extends SavedData {
     private static final Codec<BodyRecord> BODY_RECORD_CODEC = RecordCodecBuilder.create(instance -> instance
             .group(UUID_CODEC.fieldOf("id").forGetter(BodyRecord::id),
                     UUID_CODEC.fieldOf("sketch_id").forGetter(BodyRecord::sketchId),
-                    Codec.INT.fieldOf("object_index").forGetter(BodyRecord::objectIndex),
+                    Codec.INT.listOf().fieldOf("object_indices").forGetter(BodyRecord::objectIndices),
                     OPERATION_CODEC.fieldOf("operation").forGetter(BodyRecord::operation),
                     Codec.STRING.fieldOf("block").forGetter(BodyRecord::block),
                     Codec.INT.fieldOf("depth").forGetter(BodyRecord::depth),
@@ -76,16 +76,20 @@ public final class ExtrusionWorldData extends SavedData {
         return level.getServer().overworld().getDataStorage().computeIfAbsent(TYPE);
     }
 
-    public UUID recordBody(PlaneSketch sketch, int objectIndex, SketchObject object, Operation operation, String block, int depth,
+    public UUID recordBody(PlaneSketch sketch, List<Integer> objectIndices, Operation operation, String block, int depth,
             List<BlockPos> positions) {
         if (positions.isEmpty()) {
             return null;
         }
 
         ensureSketch(sketch);
-        ensurePrimitive(sketch.id(), objectIndex, primitiveType(object));
+        for (Integer objectIndex : objectIndices) {
+            if (objectIndex >= 0 && objectIndex < sketch.objects().size()) {
+                ensurePrimitive(sketch.id(), objectIndex, primitiveType(sketch.objects().get(objectIndex)));
+            }
+        }
         UUID bodyId = UUID.randomUUID();
-        bodies.add(new BodyRecord(bodyId, sketch.id(), objectIndex, operation, block, depth, List.copyOf(positions)));
+        bodies.add(new BodyRecord(bodyId, sketch.id(), objectIndices, operation, block, depth, List.copyOf(positions)));
         setDirty();
         return bodyId;
     }
@@ -162,9 +166,10 @@ public final class ExtrusionWorldData extends SavedData {
     public record PrimitiveRecord(UUID sketchId, int objectIndex, String type) {
     }
 
-    public record BodyRecord(UUID id, UUID sketchId, int objectIndex, Operation operation, String block, int depth,
+    public record BodyRecord(UUID id, UUID sketchId, List<Integer> objectIndices, Operation operation, String block, int depth,
             List<BlockPos> positions) {
         public BodyRecord {
+            objectIndices = List.copyOf(objectIndices);
             positions = List.copyOf(positions);
         }
     }

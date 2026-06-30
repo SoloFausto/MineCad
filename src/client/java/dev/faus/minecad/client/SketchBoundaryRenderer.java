@@ -1,7 +1,7 @@
 package dev.faus.minecad.client;
 
-import java.util.List;
 import java.util.Optional;
+import java.util.List;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -10,14 +10,15 @@ import dev.faus.minecad.PlaneItem;
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
 import dev.faus.minecad.BoxToolItem;
 import dev.faus.minecad.CircleToolItem;
-import dev.faus.minecad.ExtrudeToolItem;
 import dev.faus.minecad.SelectToolItem;
-import dev.faus.minecad.SketchToolItem;
+import dev.faus.minecad.PolygonToolItem;
+import dev.faus.minecad.DebugToolItem;
 import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
 import dev.faus.minecad.sketch.PlaneSketchData.SketchObject;
 import dev.faus.minecad.sketch.PlanePoint;
 import dev.faus.minecad.sketch.SketchGeometry;
 import dev.faus.minecad.sketch.SketchGeometry.Bounds;
+import dev.faus.minecad.sketch.SketchGeometry.FaceRegion;
 import dev.faus.minecad.sketch.SketchPlane;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
@@ -35,11 +36,13 @@ public final class SketchBoundaryRenderer {
     private static final int SKETCH_PLANE_COLOR = 0x33FFFFFF;
     private static final int POLYGON_COLOR = 0x66FFFFFF;
     private static final int SELECTED_POLYGON_COLOR = 0xAA55CCFF;
-    private static final int SELECTED_BODY_COLOR = 0x00FFFF00;
+    private static final int FACE_BORDER_COLOR = 0xFF000000;
+    private static final int DEBUG_BODY_COLOR = 0x00FFFF00;
     private static final int MAX_SDF_CELLS = 4096;
     private static final int EMPTY_PLANE_RADIUS = 8;
     private static final int PLANE_PADDING = 2;
     private static final double PLANE_RENDER_OFFSET = 0.03D;
+    private static final double FACE_BORDER_WIDTH = 0.05D;
 
     private SketchBoundaryRenderer() {
     }
@@ -55,26 +58,21 @@ public final class SketchBoundaryRenderer {
         }
 
         boolean holdingSketchItem = isHoldingSketchItem(client);
-        boolean holdingSelectTool = isHoldingSelectTool(client);
-        if (!holdingSketchItem && !holdingSelectTool) {
+        if (!holdingSketchItem) {
             return;
         }
 
         Vec3 camera = client.gameRenderer.getMainCamera().position();
         PoseStack matrices = context.poseStack();
 
-        if (holdingSelectTool) {
-            renderSelectedBody(matrices, context, client, camera);
-        }
+        PlaneSketchStack active = PlaneItem.getActivePlaneSketch(client.player)
+                .orElse(null);
 
-        if (holdingSketchItem) {
-            PlaneSketchStack active = PlaneItem.getActivePlaneSketch(client.player)
-                    .orElse(null);
-            if (active != null && client.level.dimension().identifier().toString().equals(active.sketch().dimension())) {
-                PlaneSketch sketch = active.sketch();
-                renderSketchPlane(matrices, context, sketch, camera);
-                renderSketchObjects(matrices, context, sketch, selectedObjectIndex(client, sketch), camera);
-            }
+        if (active != null && client.level.dimension().identifier().toString().equals(active.sketch().dimension())) {
+            PlaneSketch sketch = active.sketch();
+            renderSketchPlane(matrices, context, sketch, camera);
+            renderSketchObjects(matrices, context, sketch, selectedObjectIndex(client, sketch), camera);
+            renderDebugBody(matrices, context, client, camera);
         }
 
         context.bufferSource().endBatch(RenderTypes.debugQuads());
@@ -92,14 +90,9 @@ public final class SketchBoundaryRenderer {
     }
 
     private static boolean isSketchItem(ItemStack stack) {
-        return stack.getItem() instanceof PlaneItem || stack.getItem() instanceof SketchToolItem
+        return stack.getItem() instanceof PlaneItem || stack.getItem() instanceof PolygonToolItem
                 || stack.getItem() instanceof BoxToolItem || stack.getItem() instanceof CircleToolItem
-                || stack.getItem() instanceof ExtrudeToolItem;
-    }
-
-    private static boolean isHoldingSelectTool(Minecraft client) {
-        return client.player.getMainHandItem().getItem() instanceof SelectToolItem
-                || client.player.getOffhandItem().getItem() instanceof SelectToolItem;
+                || stack.getItem() instanceof SelectToolItem || stack.getItem() instanceof DebugToolItem;
     }
 
     private static void renderGhostBlock(PoseStack matrices, LevelRenderContext context, BlockPos pos, Vec3 camera) {
@@ -133,37 +126,70 @@ public final class SketchBoundaryRenderer {
     }
 
     private static void renderSketchObjects(PoseStack matrices, LevelRenderContext context, PlaneSketch sketch,
-            Optional<Integer> selectedObjectIndex, Vec3 camera) {
-        for (int i = 0; i < sketch.objects().size(); i++) {
-            SketchObject object = sketch.objects().get(i);
+            Optional<SelectToolItem.Selection> selection, Vec3 camera) {
+        for (SketchObject object : sketch.objects()) {
             renderVertices(matrices, context, sketch, object, camera);
-            Bounds bounds = SketchGeometry.bounds(object);
-            if (bounds != null) {
-                int color = selectedObjectIndex.isPresent() && selectedObjectIndex.get() == i
-                        ? SELECTED_POLYGON_COLOR
-                        : POLYGON_COLOR;
-                renderObjectSdf(matrices, context, sketch, object, bounds, color, camera);
+        }
+
+        for (FaceRegion region : SketchGeometry.faceRegions(sketch)) {
+            Bounds bounds = region.bounds();
+            int cells = (bounds.maxU() - bounds.minU() + 1) * (bounds.maxV() - bounds.minV() + 1);
+            if (cells > MAX_SDF_CELLS) {
+                continue;
+            }
+
+            int color = selection.isPresent() && selection.get().faces().stream().anyMatch(face -> face.matches(region))
+                    ? SELECTED_POLYGON_COLOR
+                    : POLYGON_COLOR;
+            renderFaceRegion(matrices, context, sketch, region, color, camera);
+            renderFaceBorder(matrices, context, sketch, region, camera);
+        }
+    }
+
+    private static void renderFaceRegion(PoseStack matrices, LevelRenderContext context, PlaneSketch sketch,
+            FaceRegion region, int color, Vec3 camera) {
+        VertexConsumer quads = context.bufferSource().getBuffer(RenderTypes.debugQuads());
+        Bounds bounds = region.bounds();
+        for (int u = bounds.minU(); u <= bounds.maxU(); u++) {
+            for (int v = bounds.minV(); v <= bounds.maxV(); v++) {
+                if (SketchGeometry.contains(region, sketch, u, v)) {
+                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(), u - 0.01D, v - 0.01D,
+                            u + 1.01D, v + 1.01D, camera, color);
+                }
             }
         }
     }
 
-    private static void renderObjectSdf(PoseStack matrices, LevelRenderContext context, PlaneSketch sketch,
-            SketchObject object, Bounds bounds, int color, Vec3 camera) {
-        if (object instanceof SketchObject.Polygon polygon && polygon.vertices().size() < 3) {
-            return;
-        }
-
-        int cells = (bounds.maxU() - bounds.minU() + 1) * (bounds.maxV() - bounds.minV() + 1);
-        if (cells > MAX_SDF_CELLS) {
-            return;
-        }
-
+    private static void renderFaceBorder(PoseStack matrices, LevelRenderContext context, PlaneSketch sketch,
+            FaceRegion region, Vec3 camera) {
         VertexConsumer quads = context.bufferSource().getBuffer(RenderTypes.debugQuads());
+        Bounds bounds = region.bounds();
         for (int u = bounds.minU(); u <= bounds.maxU(); u++) {
             for (int v = bounds.minV(); v <= bounds.maxV(); v++) {
-                if (SketchGeometry.contains(object, u + 0.5D, v + 0.5D)) {
-                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(), u - 0.01D, v - 0.01D,
-                            u + 1.01D, v + 1.01D, camera, color);
+                if (!SketchGeometry.contains(region, sketch, u, v)) {
+                    continue;
+                }
+
+                if (!SketchGeometry.contains(region, sketch, u - 1, v)) {
+                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(), u - FACE_BORDER_WIDTH,
+                            v - FACE_BORDER_WIDTH, u + FACE_BORDER_WIDTH, v + 1.0D + FACE_BORDER_WIDTH, camera,
+                            FACE_BORDER_COLOR);
+                }
+                if (!SketchGeometry.contains(region, sketch, u + 1, v)) {
+                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(),
+                            u + 1.0D - FACE_BORDER_WIDTH,
+                            v - FACE_BORDER_WIDTH, u + 1.0D + FACE_BORDER_WIDTH, v + 1.0D + FACE_BORDER_WIDTH, camera,
+                            FACE_BORDER_COLOR);
+                }
+                if (!SketchGeometry.contains(region, sketch, u, v - 1)) {
+                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(), u - FACE_BORDER_WIDTH,
+                            v - FACE_BORDER_WIDTH, u + 1.0D + FACE_BORDER_WIDTH, v + FACE_BORDER_WIDTH, camera,
+                            FACE_BORDER_COLOR);
+                }
+                if (!SketchGeometry.contains(region, sketch, u, v + 1)) {
+                    addPlaneQuad(matrices, quads, sketch.plane(), sketch.renderOffsetSign(), u - FACE_BORDER_WIDTH,
+                            v + 1.0D - FACE_BORDER_WIDTH, u + 1.0D + FACE_BORDER_WIDTH, v + 1.0D + FACE_BORDER_WIDTH,
+                            camera, FACE_BORDER_COLOR);
                 }
             }
         }
@@ -181,6 +207,57 @@ public final class SketchBoundaryRenderer {
         } else if (object instanceof SketchObject.Circle circle) {
             renderGhostBlock(matrices, context, sketch.plane().unproject(circle.center()), camera);
         }
+    }
+
+    private static void renderDebugBody(PoseStack matrices, LevelRenderContext context, Minecraft client,
+            Vec3 camera) {
+        int color = blinkingColor(client.level.getGameTime());
+        VertexConsumer quads = context.bufferSource().getBuffer(RenderTypes.debugQuads());
+        for (BlockPos pos : debugBodyPositions(client)) {
+            if (!client.level.getBlockState(pos).isAir()) {
+                renderBlockOverlay(matrices, quads, pos, camera, color);
+            }
+        }
+    }
+
+    private static List<BlockPos> debugBodyPositions(Minecraft client) {
+        List<BlockPos> mainHand = DebugToolItem.selectedPositions(client.player.getMainHandItem());
+        if (!mainHand.isEmpty()) {
+            return mainHand;
+        }
+        return DebugToolItem.selectedPositions(client.player.getOffhandItem());
+    }
+
+    private static int blinkingColor(long gameTime) {
+        double phase = (Math.sin(gameTime * 0.45D) + 1.0D) * 0.5D;
+        int alpha = 48 + (int) Math.round(phase * 128.0D);
+        return (alpha << 24) | DEBUG_BODY_COLOR;
+    }
+
+    private static void renderBlockOverlay(PoseStack matrices, VertexConsumer consumer, BlockPos pos, Vec3 camera,
+            int color) {
+        double minX = pos.getX() - camera.x() - 0.002D;
+        double minY = pos.getY() - camera.y() - 0.002D;
+        double minZ = pos.getZ() - camera.z() - 0.002D;
+        double maxX = pos.getX() + 1.0D - camera.x() + 0.002D;
+        double maxY = pos.getY() + 1.0D - camera.y() + 0.002D;
+        double maxZ = pos.getZ() + 1.0D - camera.z() + 0.002D;
+
+        addQuad(matrices, consumer, minX, minY, minZ, maxX, minY, minZ, maxX, maxY, minZ, minX, maxY, minZ, color);
+        addQuad(matrices, consumer, minX, minY, maxZ, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, minY, maxZ, color);
+        addQuad(matrices, consumer, minX, minY, minZ, minX, minY, maxZ, maxX, minY, maxZ, maxX, minY, minZ, color);
+        addQuad(matrices, consumer, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, color);
+        addQuad(matrices, consumer, minX, minY, minZ, minX, maxY, minZ, minX, maxY, maxZ, minX, minY, maxZ, color);
+        addQuad(matrices, consumer, maxX, minY, minZ, maxX, minY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, color);
+    }
+
+    private static void addQuad(PoseStack matrices, VertexConsumer consumer, double x1, double y1, double z1,
+            double x2, double y2, double z2, double x3, double y3, double z3, double x4, double y4, double z4,
+            int color) {
+        addVertex(matrices, consumer, x1, y1, z1, color);
+        addVertex(matrices, consumer, x2, y2, z2, color);
+        addVertex(matrices, consumer, x3, y3, z3, color);
+        addVertex(matrices, consumer, x4, y4, z4, color);
     }
 
     private static void addPlaneQuad(PoseStack matrices, VertexConsumer consumer, SketchPlane plane,
@@ -241,64 +318,13 @@ public final class SketchBoundaryRenderer {
         consumer.addVertex(matrices.last(), (float) x, (float) y, (float) z).setColor(color);
     }
 
-    private static void renderSelectedBody(PoseStack matrices, LevelRenderContext context, Minecraft client,
-            Vec3 camera) {
-        int color = blinkingColor(client.level.getGameTime());
-        VertexConsumer quads = context.bufferSource().getBuffer(RenderTypes.debugQuads());
-        for (BlockPos pos : selectedBodyPositions(client)) {
-            if (client.level.getBlockState(pos).isAir()) {
-                continue;
-            }
-            renderBlockOverlay(matrices, quads, pos, camera, color);
-        }
-    }
-
-    private static List<BlockPos> selectedBodyPositions(Minecraft client) {
-        List<BlockPos> mainHand = SelectToolItem.selectedPositions(client.player.getMainHandItem());
-        if (!mainHand.isEmpty()) {
+    private static Optional<SelectToolItem.Selection> selectedObjectIndex(Minecraft client, PlaneSketch sketch) {
+        Optional<SelectToolItem.Selection> mainHand = SelectToolItem.selectedFace(client.player.getMainHandItem());
+        if (mainHand.isPresent() && mainHand.get().planeId().equals(sketch.id())) {
             return mainHand;
         }
-        return SelectToolItem.selectedPositions(client.player.getOffhandItem());
-    }
-
-    private static int blinkingColor(long gameTime) {
-        double phase = (Math.sin(gameTime * 0.45D) + 1.0D) * 0.5D;
-        int alpha = 48 + (int) Math.round(phase * 128.0D);
-        return (alpha << 24) | SELECTED_BODY_COLOR;
-    }
-
-    private static void renderBlockOverlay(PoseStack matrices, VertexConsumer consumer, BlockPos pos, Vec3 camera,
-            int color) {
-        double minX = pos.getX() - camera.x() - 0.002D;
-        double minY = pos.getY() - camera.y() - 0.002D;
-        double minZ = pos.getZ() - camera.z() - 0.002D;
-        double maxX = pos.getX() + 1.0D - camera.x() + 0.002D;
-        double maxY = pos.getY() + 1.0D - camera.y() + 0.002D;
-        double maxZ = pos.getZ() + 1.0D - camera.z() + 0.002D;
-
-        addQuad(matrices, consumer, minX, minY, minZ, maxX, minY, minZ, maxX, maxY, minZ, minX, maxY, minZ, color);
-        addQuad(matrices, consumer, minX, minY, maxZ, minX, maxY, maxZ, maxX, maxY, maxZ, maxX, minY, maxZ, color);
-        addQuad(matrices, consumer, minX, minY, minZ, minX, minY, maxZ, maxX, minY, maxZ, maxX, minY, minZ, color);
-        addQuad(matrices, consumer, minX, maxY, minZ, maxX, maxY, minZ, maxX, maxY, maxZ, minX, maxY, maxZ, color);
-        addQuad(matrices, consumer, minX, minY, minZ, minX, maxY, minZ, minX, maxY, maxZ, minX, minY, maxZ, color);
-        addQuad(matrices, consumer, maxX, minY, minZ, maxX, minY, maxZ, maxX, maxY, maxZ, maxX, maxY, minZ, color);
-    }
-
-    private static void addQuad(PoseStack matrices, VertexConsumer consumer, double x1, double y1, double z1,
-            double x2, double y2, double z2, double x3, double y3, double z3, double x4, double y4, double z4,
-            int color) {
-        addVertex(matrices, consumer, x1, y1, z1, color);
-        addVertex(matrices, consumer, x2, y2, z2, color);
-        addVertex(matrices, consumer, x3, y3, z3, color);
-        addVertex(matrices, consumer, x4, y4, z4, color);
-    }
-
-    private static Optional<Integer> selectedObjectIndex(Minecraft client, PlaneSketch sketch) {
-        Optional<Integer> mainHand = ExtrudeToolItem.selectedObjectIndex(client.player.getMainHandItem(), sketch.id());
-        if (mainHand.isPresent()) {
-            return mainHand;
-        }
-        return ExtrudeToolItem.selectedObjectIndex(client.player.getOffhandItem(), sketch.id());
+        Optional<SelectToolItem.Selection> offHand = SelectToolItem.selectedFace(client.player.getOffhandItem());
+        return offHand.filter(selection -> selection.planeId().equals(sketch.id()));
     }
 
 }

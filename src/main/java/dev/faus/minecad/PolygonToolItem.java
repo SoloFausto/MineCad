@@ -5,7 +5,7 @@ import java.util.function.Consumer;
 
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
 import dev.faus.minecad.sketch.PlaneSketchData;
-import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
+import dev.faus.minecad.sketch.PlaneSketchData.PolygonAppendResult;
 import dev.faus.minecad.sketch.PlanePoint;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -18,8 +18,8 @@ import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 
-public class SketchToolItem extends Item {
-    public SketchToolItem(Properties properties) {
+public class PolygonToolItem extends Item {
+    public PolygonToolItem(Properties properties) {
         super(properties);
     }
 
@@ -52,13 +52,18 @@ public class SketchToolItem extends Item {
             return InteractionResult.FAIL;
         }
 
-        PlaneSketch updated = PlaneSketchData.appendPolygonVertex(activePlane.get().stack(), vertex)
-                .orElse(activePlane.get().sketch());
-        int vertexCount = updated.firstPolygon().map(polygon -> polygon.vertices().size()).orElse(0);
+        PolygonAppendResult result = PlaneSketchData.appendPolygonVertex(activePlane.get().stack(), vertex)
+                .orElse(null);
+        if (result == null) {
+            return InteractionResult.FAIL;
+        }
         if (!level.isClientSide()) {
-            var pos = updated.plane().unproject(vertex);
-            sendMessage(player, Component.translatable("message.minecad.sketch_tool.vertex",
-                    vertexCount, pos.getX(), pos.getY(), pos.getZ()));
+            var pos = result.sketch().plane().unproject(vertex);
+            String messageKey = result.closed()
+                    ? "message.minecad.sketch_tool.closed"
+                    : "message.minecad.sketch_tool.vertex";
+            sendMessage(player, Component.translatable(messageKey,
+                    result.vertexCount(), pos.getX(), pos.getY(), pos.getZ()));
         }
         return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.SUCCESS_SERVER;
     }

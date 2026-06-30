@@ -6,14 +6,16 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
 
-import dev.faus.minecad.sketch.ExtrusionWorldData;
-import dev.faus.minecad.sketch.ExtrusionWorldData.BodyRecord;
-import net.minecraft.core.BlockPos;
+import dev.faus.minecad.PlaneItem.PlaneSketchStack;
+import dev.faus.minecad.sketch.PlanePoint;
+import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
+import dev.faus.minecad.sketch.SketchGeometry;
+import dev.faus.minecad.sketch.SketchGeometry.FaceRegion;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
@@ -26,11 +28,13 @@ import net.minecraft.world.level.Level;
 
 public class SelectToolItem extends Item {
     private static final String TOOL_TAG = "minecad_select_tool";
-    private static final String BODY_ID_TAG = "body_id";
-    private static final String POSITIONS_TAG = "positions";
-    private static final String X_TAG = "x";
-    private static final String Y_TAG = "y";
-    private static final String Z_TAG = "z";
+    private static final String PLANE_ID_TAG = "plane_id";
+    private static final String OBJECT_INDEX_TAG = "object_index";
+    private static final String OBJECT_INDICES_TAG = "object_indices";
+    private static final String FACES_TAG = "faces";
+    private static final String SEED_TAG = "seed";
+    private static final String U_TAG = "u";
+    private static final String V_TAG = "v";
 
     public SelectToolItem(Properties properties) {
         super(properties);
@@ -43,7 +47,18 @@ public class SelectToolItem extends Item {
             return InteractionResult.PASS;
         }
 
-        return selectBody(context.getLevel(), player, context.getItemInHand(), context.getClickedPos());
+        Optional<PlanePoint> point = SketchToolSupport.pointFromUseOn(context);
+        return point.map(planePoint -> updateSelection(context.getLevel(), player, context.getItemInHand(), planePoint,
+                player.isShiftKeyDown()))
+                .orElse(InteractionResult.FAIL);
+    }
+
+    @Override
+    public InteractionResult use(Level level, Player player, InteractionHand hand) {
+        Optional<PlanePoint> point = SketchToolSupport.pointFromRaycast(level, player);
+        return point.map(planePoint -> updateSelection(level, player, player.getItemInHand(hand), planePoint,
+                player.isShiftKeyDown()))
+                .orElse(InteractionResult.FAIL);
     }
 
     @Override
@@ -52,80 +67,183 @@ public class SelectToolItem extends Item {
         tooltip.accept(Component.translatable("tooltip.minecad.select_tool"));
     }
 
-    public static List<BlockPos> selectedPositions(ItemStack stack) {
+    public static Optional<Selection> selectedFace(ItemStack stack) {
         CompoundTag tag = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY).copyTag()
                 .getCompoundOrEmpty(TOOL_TAG);
-        if (!tag.contains(BODY_ID_TAG)) {
-            return List.of();
+        if (!tag.contains(PLANE_ID_TAG)) {
+            return Optional.empty();
         }
 
-        List<BlockPos> positions = new ArrayList<>();
-        ListTag positionTags = tag.getListOrEmpty(POSITIONS_TAG);
-        for (int i = 0; i < positionTags.size(); i++) {
-            CompoundTag positionTag = positionTags.getCompoundOrEmpty(i);
-            positions.add(new BlockPos(positionTag.getIntOr(X_TAG, 0), positionTag.getIntOr(Y_TAG, 0),
-                    positionTag.getIntOr(Z_TAG, 0)));
+        try {
+            UUID planeId = UUID.fromString(tag.getStringOr(PLANE_ID_TAG, ""));
+            List<FaceSelection> faces = readFaces(tag);
+            if (faces.isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.of(new Selection(planeId, faces));
+        } catch (IllegalArgumentException exception) {
+            return Optional.empty();
         }
-        return List.copyOf(positions);
     }
 
-    private static InteractionResult selectBody(Level level, Player player, ItemStack toolStack, BlockPos pos) {
-        if (level.isClientSide()) {
-            return InteractionResult.SUCCESS;
-        }
-        if (!(level instanceof ServerLevel serverLevel)) {
+    public static FaceSelection faceSelection(FaceRegion region) {
+        return new FaceSelection(region.objectIndices(), region.seed());
+    }
+
+    public static boolean hasSelectedFace(Player player) {
+        return selectedFace(player.getMainHandItem()).isPresent() || selectedFace(player.getOffhandItem()).isPresent();
+    }
+
+    private static InteractionResult updateSelection(Level level, Player player, ItemStack toolStack, PlanePoint point,
+            boolean unselect) {
+        Optional<PlaneSketchStack> activePlane = SketchToolSupport.activePlane(level, player);
+        if (activePlane.isEmpty()) {
             return InteractionResult.FAIL;
         }
 
-        Optional<BodyRecord> body = ExtrusionWorldData.get(serverLevel).findBodyContaining(
-                level.dimension().identifier().toString(), pos);
-        if (body.isEmpty()) {
-            clearSelection(toolStack);
-            SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.no_body"));
+        PlaneSketch sketch = activePlane.get().sketch();
+        FaceRegion region = SketchGeometry.faceRegionAt(sketch, point);
+        if (region == null) {
+            if (!level.isClientSide()) {
+                SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.no_face"));
+            }
             return InteractionResult.FAIL;
         }
 
-        List<BlockPos> positions = solidPositions(level, body.get().positions());
-        if (positions.isEmpty()) {
-            clearSelection(toolStack);
-            SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.no_body"));
-            return InteractionResult.FAIL;
+        List<FaceSelection> selectedFaces = selectedFace(toolStack)
+                .filter(selection -> selection.planeId().equals(sketch.id()))
+                .map(selection -> new ArrayList<>(selection.faces()))
+                .orElseGet(ArrayList::new);
+        FaceSelection selectedRegion = faceSelection(region);
+        if (unselect) {
+            if (!selectedFaces.remove(selectedRegion)) {
+                return InteractionResult.FAIL;
+            }
+            writeSelection(toolStack, sketch.id(), selectedFaces);
+            if (!level.isClientSide()) {
+                SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.unselected"));
+            }
+            return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.SUCCESS_SERVER;
         }
 
-        writeSelection(toolStack, body.get().id(), positions);
-        SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.selected",
-                positions.size()));
-        return InteractionResult.SUCCESS_SERVER;
+        if (!selectedFaces.contains(selectedRegion)) {
+            selectedFaces.add(selectedRegion);
+        }
+        writeSelection(toolStack, sketch.id(), selectedFaces);
+        if (!level.isClientSide()) {
+            SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.select_tool.selected"));
+        }
+        return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.SUCCESS_SERVER;
     }
 
-    private static List<BlockPos> solidPositions(Level level, List<BlockPos> positions) {
-        return positions.stream()
-                .filter(pos -> !level.getBlockState(pos).isAir())
-                .toList();
+    private static List<FaceSelection> readFaces(CompoundTag tag) {
+        if (tag.contains(FACES_TAG)) {
+            List<FaceSelection> faces = new ArrayList<>();
+            ListTag faceTags = tag.getListOrEmpty(FACES_TAG);
+            for (int i = 0; i < faceTags.size(); i++) {
+                Optional<FaceSelection> face = readFace(faceTags.getCompoundOrEmpty(i));
+                face.ifPresent(faces::add);
+            }
+            return List.copyOf(faces);
+        }
+
+        List<Integer> legacyFace = readObjectIndices(tag);
+        return legacyFace.isEmpty() ? List.of() : List.of(new FaceSelection(legacyFace, null));
     }
 
-    private static void writeSelection(ItemStack stack, UUID bodyId, List<BlockPos> positions) {
+    private static Optional<FaceSelection> readFace(CompoundTag tag) {
+        List<Integer> objectIndices = readObjectIndices(tag);
+        if (objectIndices.isEmpty()) {
+            return Optional.empty();
+        }
+
+        if (!tag.contains(SEED_TAG)) {
+            return Optional.of(new FaceSelection(objectIndices, null));
+        }
+
+        CompoundTag seedTag = tag.getCompoundOrEmpty(SEED_TAG);
+        return Optional.of(new FaceSelection(objectIndices,
+                new PlanePoint(seedTag.getIntOr(U_TAG, 0), seedTag.getIntOr(V_TAG, 0))));
+    }
+
+    private static List<Integer> readObjectIndices(CompoundTag tag) {
+        if (tag.contains(OBJECT_INDICES_TAG)) {
+            List<Integer> indices = new ArrayList<>();
+            ListTag indexTags = tag.getListOrEmpty(OBJECT_INDICES_TAG);
+            for (int i = 0; i < indexTags.size(); i++) {
+                CompoundTag indexTag = indexTags.getCompoundOrEmpty(i);
+                indices.add(indexTag.getIntOr(OBJECT_INDEX_TAG, -1));
+            }
+            return indices.stream().filter(index -> index >= 0).toList();
+        }
+        if (tag.contains(OBJECT_INDEX_TAG)) {
+            return List.of(tag.getIntOr(OBJECT_INDEX_TAG, -1)).stream().filter(index -> index >= 0).toList();
+        }
+        return List.of();
+    }
+
+    private static void writeSelection(ItemStack stack, UUID planeId, List<FaceSelection> faces) {
         CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> {
+            if (faces.isEmpty()) {
+                tag.remove(TOOL_TAG);
+                return;
+            }
+
             CompoundTag tool = new CompoundTag();
-            tool.putString(BODY_ID_TAG, bodyId.toString());
-            tool.put(POSITIONS_TAG, writePositions(positions));
+            tool.putString(PLANE_ID_TAG, planeId.toString());
+            tool.put(FACES_TAG, writeFaces(faces));
             tag.put(TOOL_TAG, tool);
         });
     }
 
-    private static ListTag writePositions(List<BlockPos> positions) {
+    private static ListTag writeFaces(List<FaceSelection> faces) {
         ListTag tags = new ListTag();
-        for (BlockPos pos : positions) {
-            CompoundTag tag = new CompoundTag();
-            tag.putInt(X_TAG, pos.getX());
-            tag.putInt(Y_TAG, pos.getY());
-            tag.putInt(Z_TAG, pos.getZ());
-            tags.add(tag);
+        for (FaceSelection face : faces) {
+            CompoundTag faceTag = new CompoundTag();
+            faceTag.put(OBJECT_INDICES_TAG, writeObjectIndices(face.objectIndices()));
+            if (face.seed() != null) {
+                faceTag.put(SEED_TAG, writePoint(face.seed()));
+            }
+            tags.add(faceTag);
         }
         return tags;
     }
 
-    private static void clearSelection(ItemStack stack) {
-        CustomData.update(DataComponents.CUSTOM_DATA, stack, tag -> tag.remove(TOOL_TAG));
+    private static ListTag writeObjectIndices(List<Integer> objectIndices) {
+        ListTag tags = new ListTag();
+        for (Integer objectIndex : objectIndices) {
+            CompoundTag indexTag = new CompoundTag();
+            indexTag.putInt(OBJECT_INDEX_TAG, objectIndex);
+            tags.add(indexTag);
+        }
+        return tags;
+    }
+
+    private static CompoundTag writePoint(PlanePoint point) {
+        CompoundTag tag = new CompoundTag();
+        tag.putInt(U_TAG, point.u());
+        tag.putInt(V_TAG, point.v());
+        return tag;
+    }
+
+    public record Selection(UUID planeId, List<FaceSelection> faces) {
+        public Selection {
+            faces = faces.stream()
+                    .map(face -> new FaceSelection(face.objectIndices(), face.seed()))
+                    .toList();
+        }
+    }
+
+    public record FaceSelection(List<Integer> objectIndices, PlanePoint seed) {
+        public FaceSelection {
+            objectIndices = List.copyOf(objectIndices);
+        }
+
+        public boolean matches(FaceRegion region) {
+            if (!objectIndices.equals(region.objectIndices())) {
+                return false;
+            }
+            return seed == null || seed.equals(region.seed());
+        }
     }
 }

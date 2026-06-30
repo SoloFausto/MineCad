@@ -7,7 +7,7 @@ import java.util.function.Consumer;
 
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
 import dev.faus.minecad.sketch.ExtrusionWorldData;
-import dev.faus.minecad.sketch.ExtrusionWorldData.BodyRecord;
+import dev.faus.minecad.sketch.ExtrusionWorldData.OperationRecord;
 import dev.faus.minecad.sketch.PlanePoint;
 import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
 import dev.faus.minecad.sketch.PlaneSketchData.SketchObject;
@@ -89,16 +89,16 @@ public class DebugToolItem extends Item {
             return InteractionResult.FAIL;
         }
 
-        Optional<BodyRecord> body = ExtrusionWorldData.get(serverLevel).findBodyContaining(
+        Optional<OperationRecord> operation = ExtrusionWorldData.get(serverLevel).findOperationContaining(
                 level.dimension().identifier().toString(), pos);
-        if (body.isEmpty()) {
+        if (operation.isEmpty()) {
             clearSelection(toolStack);
             SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.debug_tool.no_body"));
             return InteractionResult.FAIL;
         }
 
-        List<BlockPos> positions = body.get().positions().stream()
-                .filter(bodyPos -> !level.getBlockState(bodyPos).isAir())
+        List<BlockPos> positions = operation.get().changes().stream()
+                .map(ExtrusionWorldData.BlockChange::pos)
                 .toList();
         if (positions.isEmpty()) {
             clearSelection(toolStack);
@@ -137,16 +137,16 @@ public class DebugToolItem extends Item {
         }
 
         if (level instanceof ServerLevel serverLevel) {
-            List<BodyRecord> bodies = ExtrusionWorldData.get(serverLevel).bodies().stream()
-                    .filter(body -> body.sketchId().equals(sketch.id()))
+            List<OperationRecord> operations = ExtrusionWorldData.get(serverLevel).activeOperations().stream()
+                    .filter(operation -> operation.sketchId().equals(sketch.id()))
                     .toList();
-            SketchToolSupport.sendMessage(player, Component.literal("extrusions"));
+            SketchToolSupport.sendMessage(player, Component.literal("operations"));
             SketchToolSupport.sendMessage(player, Component.literal("# | objects | op | block | depth | blocks"));
-            for (int i = 0; i < bodies.size(); i++) {
-                BodyRecord body = bodies.get(i);
+            for (int i = 0; i < operations.size(); i++) {
+                OperationRecord operation = operations.get(i);
                 SketchToolSupport.sendMessage(player, Component.literal("%s | %s | %s | %s | %s | %s"
-                        .formatted(i, body.objectIndices(), body.operation().serializedName(), body.block(),
-                                body.depth(), body.positions().size())));
+                        .formatted(i, operation.objectIndices(), operation.operation().serializedName(), operation.block(),
+                                operation.depth(), operation.blockCount())));
             }
         }
     }

@@ -39,5 +39,7 @@ public class SketchItems {
                         new Item.Properties().stacksTo(1));
         public static final Item DEBUG_TOOL = register("debug_tool", DebugToolItem::new,
                         new Item.Properties().stacksTo(1));
+        public static final Item HISTORY_TOOL = register("history_tool", HistoryToolItem::new,
+                        new Item.Properties().stacksTo(1));
 
 }

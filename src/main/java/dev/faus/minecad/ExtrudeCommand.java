@@ -1,13 +1,16 @@
 package dev.faus.minecad;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
 import dev.faus.minecad.sketch.ExtrusionWorldData;
+import dev.faus.minecad.sketch.ExtrusionWorldData.BlockChange;
 import dev.faus.minecad.sketch.PlanePoint;
 import dev.faus.minecad.sketch.PlaneSketchData.PlaneSketch;
 import dev.faus.minecad.sketch.SketchGeometry;
@@ -18,7 +21,6 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.blocks.BlockStateArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction.Axis;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -123,28 +125,30 @@ public final class ExtrudeCommand {
             return 0;
         }
         int targetCoordinate = sketch.plane().coordinate() + depth;
-        List<BlockPos> changedPositions = new ArrayList<>();
+        List<BlockChange> changes = new ArrayList<>();
         List<FaceRegion> regions = selectedRegions(sketch, selection);
+        List<Integer> objectIndices = new ArrayList<>();
         for (FaceRegion region : regions) {
-            if (changedPositions.size() >= MAX_BLOCKS) {
+            if (changes.size() >= MAX_BLOCKS) {
                 break;
             }
 
-            List<BlockPos> changedRegionPositions = apply(level, sketch, region, targetCoordinate, operation,
+            List<BlockChange> regionChanges = apply(level, sketch, region, targetCoordinate, operation,
                     blockState,
-                    MAX_BLOCKS - changedPositions.size());
-            changedPositions.addAll(changedRegionPositions);
-            if (level instanceof ServerLevel serverLevel && !changedRegionPositions.isEmpty()) {
-                String blockId = BuiltInRegistries.BLOCK.getKey(blockState.getBlock()).toString();
-                ExtrusionWorldData.get(serverLevel).recordBody(sketch, region.objectIndices(), operation, blockId,
-                        depth, changedRegionPositions);
-            }
+                    MAX_BLOCKS - changes.size());
+            changes.addAll(regionChanges);
+            objectIndices.addAll(region.objectIndices());
+        }
+        if (level instanceof ServerLevel serverLevel && !changes.isEmpty()) {
+            String blockId = ExtrusionWorldData.blockId(blockState);
+            ExtrusionWorldData.get(serverLevel).recordOperation(sketch, objectIndices, operation, blockId, depth,
+                    changes);
         }
         if (!level.isClientSide()) {
             SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.extrude_tool.complete",
-                    changedPositions.size(), Math.abs(depth)));
+                    changes.size(), Math.abs(depth)));
         }
-        return changedPositions.size();
+        return changes.size();
     }
 
     private static List<FaceRegion> selectedRegions(PlaneSketch sketch, SelectToolItem.Selection selection) {
@@ -157,7 +161,7 @@ public final class ExtrudeCommand {
         return selectedRegions;
     }
 
-    private static List<BlockPos> apply(Level level, PlaneSketch sketch, FaceRegion region, int targetCoordinate,
+    private static List<BlockChange> apply(Level level, PlaneSketch sketch, FaceRegion region, int targetCoordinate,
             Operation operation, BlockState blockState, int maxBlocks) {
         if (level.isClientSide()) {
             return List.of();
@@ -167,7 +171,7 @@ public final class ExtrudeCommand {
 
         int direction = Integer.compare(targetCoordinate, sketch.plane().coordinate());
         int depth = Math.abs(targetCoordinate - sketch.plane().coordinate());
-        List<BlockPos> changed = new ArrayList<>();
+        Map<BlockPos, BlockChange> changes = new LinkedHashMap<>();
         for (int step = 0; step < depth; step++) {
             int coordinate = sketch.plane().coordinate() + direction * step + EXTRUDE_COORDINATE_OFFSET;
             for (int u = bounds.minU(); u <= bounds.maxU(); u++) {
@@ -175,18 +179,20 @@ public final class ExtrudeCommand {
                     if (!SketchGeometry.contains(region, sketch, u, v)) {
                         continue;
                     }
-                    if (changed.size() >= maxBlocks) {
-                        return changed;
+                    if (changes.size() >= maxBlocks) {
+                        return List.copyOf(changes.values());
                     }
                     BlockPos pos = unproject(sketch.plane().axis(), coordinate, new PlanePoint(u, v));
+                    BlockState before = level.getBlockState(pos);
                     boolean blockChanged = applyOperation(level, pos, operation, blockState);
                     if (blockChanged) {
-                        changed.add(pos);
+                        changes.putIfAbsent(pos, new BlockChange(pos, ExtrusionWorldData.blockId(before),
+                                ExtrusionWorldData.blockId(level.getBlockState(pos))));
                     }
                 }
             }
         }
-        return changed;
+        return List.copyOf(changes.values());
     }
 
     private static boolean applyOperation(Level level, BlockPos pos, Operation operation, BlockState blockState) {

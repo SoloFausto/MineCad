@@ -5,6 +5,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
+import dev.faus.minecad.sketch.ExtrusionWorldData;
 import dev.faus.minecad.sketch.PlaneSketchData;
 import dev.faus.minecad.sketch.PlanePoint;
 import net.minecraft.core.component.DataComponents;
@@ -71,9 +72,15 @@ public class BoxToolItem extends Item {
             return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.SUCCESS_SERVER;
         }
 
-        PlaneSketchData.appendBox(activePlane.get().stack(), pending.point(), point);
+        var beforeSketch = activePlane.get().sketch();
+        var result = PlaneSketchData.appendBox(activePlane.get().stack(), pending.point(), point).orElse(null);
+        if (result == null) {
+            return InteractionResult.FAIL;
+        }
         clearPending(toolStack);
         if (!level.isClientSide()) {
+            ExtrusionWorldData.get((net.minecraft.server.level.ServerLevel) level)
+                    .recordPrimitiveChange(beforeSketch, result);
             SketchToolSupport.sendMessage(player, Component.translatable("message.minecad.box_tool.complete"));
         }
         return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.SUCCESS_SERVER;

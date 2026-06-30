@@ -4,6 +4,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 import dev.faus.minecad.PlaneItem.PlaneSketchStack;
+import dev.faus.minecad.sketch.ExtrusionWorldData;
 import dev.faus.minecad.sketch.PlaneSketchData;
 import dev.faus.minecad.sketch.PlaneSketchData.PolygonAppendResult;
 import dev.faus.minecad.sketch.PlanePoint;
@@ -52,12 +53,15 @@ public class PolygonToolItem extends Item {
             return InteractionResult.FAIL;
         }
 
+        var beforeSketch = activePlane.get().sketch();
         PolygonAppendResult result = PlaneSketchData.appendPolygonVertex(activePlane.get().stack(), vertex)
                 .orElse(null);
         if (result == null) {
             return InteractionResult.FAIL;
         }
         if (!level.isClientSide()) {
+            ExtrusionWorldData.get((net.minecraft.server.level.ServerLevel) level)
+                    .recordPrimitiveChange(beforeSketch, result.sketch());
             var pos = result.sketch().plane().unproject(vertex);
             String messageKey = result.closed()
                     ? "message.minecad.sketch_tool.closed"
